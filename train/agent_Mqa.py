@@ -8,14 +8,17 @@ import time
 import random
 import numpy as np
 import json
+from datetime import datetime
 from tqdm import tqdm
 import torch.nn as nn
+import torch
 import argparse
 from torch.autograd import Variable
 from replay_memory import ReplayMemory
 from models import act_model,get_state
+import logging
 sys.path.append(r'../simulation')
-import enviroment
+import environment
 
 
 def load_vocab(path):
@@ -40,14 +43,14 @@ class DQN_Agent(object):
         print(' [*] Build Deep Q-Network')
 
         # initialize the parameter of DQN
-        self.target_q_update_step = arg.target_q_update_step
-        self.epsilon = arg.epsilon
+        self.target_q_update_step = args.target_q_update_step
+        self.epsilon = args.epsilon
         self.discount = args.discount
         self.learning_rate = args.learning_rate
         self.max_step = args.max_step
 
         self.weight_dir = r'./dqn/weights'
-        self.action_num = 32*32*8
+        self.action_num = 28*28*8
         self.env = environment
         self.memory = ReplayMemory(self.args)
         self.optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, self.eval_net.parameters()), lr= self.learning_rate)
@@ -55,16 +58,34 @@ class DQN_Agent(object):
         self.test_group_num = 3
         self.loss_func = nn.MSELoss()
 
+    def rgb_norm(self,rgb_np):
+        rgb_mean = np.mean(rgb_np)
+        rgb_std = np.std(rgb_np)
+        if rgb_std != 0:         #error image
+            rgb_miner = np.ones(rgb_np.shape)*rgb_mean
+            rgb_np = (rgb_np - rgb_miner) / rgb_std
+        rgb_tran = rgb_np.transpose((2,0,1))
+        return rgb_tran
+
+    def depth_norm(self,dep_np):
+        dep_np = dep_np*65536/10000
+        dep_np = np.clip(dep_np,0.0,1.2)   # the depth range: 0.0m -1.2m
+        dep_mean = np.mean(dep_np)
+        dep_std  = np.std(dep_np)
+        if dep_std !=0:
+            dep_miner = np.ones(dep_np.shape)*dep_mean
+            dep_np = (dep_np - dep_miner)/dep_std
+        dep_rep = np.expand_dims(dep_np,0).repeat(3,axis=0)
+        return dep_rep
+
     def choose_action(self,rgb_image,depth_image,ques):
-        if np.random.uniform() < self.epsilon:   # greedy
+        if np.random.uniform() > self.epsilon:   # greedy
             actions_value = self.eval_net.forward(rgb_image,depth_image,ques)
             action_reshape = actions_value.view(1,-1)
-            action_location = torch.max(action_reshape,1)[1].data.numpy()
-            action = [action_location/(32*32),action_location%(32*32)/32,action_location%(32*32)%32]
+            action_location = torch.max(action_reshape,1)[1].cpu().data.numpy()
         else:   # random
             action_location = np.random.randint(0, self.action_num)
-            action = [action_location/(32*32),action_location%(32*32)/32,action_location%(32*32)%32]
-        return action
+        return action_location
 
 
     def learn(self):
@@ -77,22 +98,38 @@ class DQN_Agent(object):
             self.target_net.load_state_dict(self.eval_net.state_dict())  #update target_net's parameters
         self.learn_step_counter += 1
 
-        s_t, action, reward, target, s_t_plus_1, terminal = self.memory.sample()
+        rgbs,depths, rgbs_1, depths_1,questions,actions,rewards,terminals = self.memory.sample()
 
-        q_eval = torch.max(self.eval_net(s_t,target,action),1)[0]
+        rgbs_var = Variable(torch.FloatTensor(rgbs).cuda())
+        depths_var = Variable(torch.FloatTensor(depths).cuda())
+        rgbs_1_var = Variable(torch.FloatTensor(rgbs_1).cuda())
+        depths_1_var = Variable(torch.FloatTensor(depths_1).cuda())
+        questions_var = Variable(torch.LongTensor(questions).cuda())
+        actions_var = Variable(torch.LongTensor(actions).cuda())
+        rewards_var = Variable(torch.FloatTensor(rewards).cuda())
+        terminals_var = Variable(torch.FloatTensor(terminals).cuda())
 
-        q_next = self.target_net(s_t_plus_1).detach()  #don't backward
+        q_eval_matrix = self.eval_net(rgbs_var,depths_var,questions_var)
+        q_eval_matrix = q_eval_matrix.view(-1,8*28*28)
+        q_eval = torch.max(q_eval_matrix,1)[0]
 
-        terminal = np.array(terminal) + 0.
-        q_target = reward + (1. - terminal)*self.discount * q_next.max(1)[0].view(-1, 1)
+        q_next_matrix = self.target_net(rgbs_1_var,depths_1_var,questions_var).detach()  #don't backward
+        q_next_matrix = q_next_matrix.view(-1,8*28*28)
+        q_next = torch.max(q_next_matrix,1)[0]
 
+        one_var = Variable(torch.ones_like(terminals_var))
+
+        q_target = rewards_var + (one_var- terminals_var)*self.discount * q_next
+ 
         loss = self.loss_func(q_eval, q_target)
+
+        print("loss:",loss)
 
         self.optimizer.zero_grad()
         loss.backward()
         self.optimizer.step()
 
-        self.task_total_loss += loss
+        self.task_total_loss += loss.item()
         self.task_total_q += q_target.mean()
         self.update_count += 1 
         self.learn_step_counter +=1 #
@@ -103,6 +140,11 @@ class DQN_Agent(object):
         """
             -- Train Model Process
         """
+        self.eval_net.train()
+        self.eval_net.cuda()
+        self.target_net.eval()
+        self.target_net.cuda()
+
         self.update_count = 0
         self.learn_step_counter = 0
         task_total_reward, self.task_total_loss, self.task_total_q = 0., 0., 0.
@@ -110,35 +152,51 @@ class DQN_Agent(object):
 
         for group_num in range(self.test_group_num):  # one eposide
             for scene_num in range(10):
-                rgb_image,depth_image,all_ques = self.env.new_scene(group_num = group_num,scene_num = scene_num)      #new scene
-                for single_ques in all_ques:   #one task
+                rgb_image_raw,depth_image_raw,all_ques,all_encode_ques = self.env.new_scene(group_num = group_num,scene_num = scene_num)      #new scene
+                
+                rgb_image = self.rgb_norm(rgb_image_raw)
+                depth_image = self.depth_norm(depth_image_raw)
+
+                for i in range(len(all_encode_ques)):   #one task
+                    single_encode_ques = all_encode_ques[i]
+                    single_ques = all_ques[i]
                     task_total_reward = 0
                     self.task_total_loss = 0
                     self.task_total_q = 0
                     self.update_count = 0
+                    task_act_num =0
                     for act_step in range(self.max_step):
 
                         # 1. predict
-                        rgb_image_var = Variable(rgb_image.cuda())
-                        depth_image_var = Variable(depth_image.cuda())
-                        questions_var = Variable(single_ques.cuda())
-                        action = self.choose_action(rgb_image_var,depth_image_var,questions_var)
+                        rgb_image_var = Variable(torch.FloatTensor(rgb_image).cuda())
+                        rgb_image_var = rgb_image_var.unsqueeze(0)
+                        depth_image_var = Variable(torch.FloatTensor(depth_image).cuda())
+                        depth_image_var = depth_image_var.unsqueeze(0)
+                        question_var = Variable(torch.LongTensor(single_encode_ques).cuda())
+                        question_var = question_var.unsqueeze(0)
+                        action = self.choose_action(rgb_image_var,depth_image_var,question_var)
                         # 2. act
                         # notice the action is in [0, 18*18*8-1]
-                        rgb_1_image, depth_1_image, reward, terminal = self.env.act(action)
+                        rgb_1_image_raw, depth_1_image_raw, reward, terminal = self.env.act(action,single_ques['obj'],single_ques['type'])
+                        
+                        rgb_1_image = self.rgb_norm(rgb_1_image_raw)
+                        depth_1_image = self.depth_norm(depth_1_image_raw)
+                        print("target:",single_ques['obj'])
                         # 3. observe & store
-                        self.memory.add(rgb_image, depth_image, rgb_1_image, depth_1_image,single_ques,action,reward,terminal)
+                        self.memory.add(rgb_image, depth_image, rgb_1_image, depth_1_image,single_encode_ques,action,reward,terminal)
                         # 4. learn
                         self.learn()
 
                         task_total_reward += reward
+                        task_act_num += 1   
 
-                        if terminal:                    
+                        if terminal:                                            
                             break
 
-                    avg_reward = task_total_reward / act_step       # caculate the average reward after one task
-                    avg_loss = self.task_total_q / self.update_count 
-                    avg_q = self.update_count / self.update_count    
+
+                    avg_reward = task_total_reward / task_act_num       # caculate the average reward after one task
+                    avg_loss = self.task_total_loss / self.update_count 
+                    avg_q = self.task_total_q / self.update_count 
 
 
                 if  0.8*avg_reward > max_avg_act_reward:   #avg_reward相当于在新的场景测试集上的test score
@@ -149,6 +207,7 @@ class DQN_Agent(object):
                     print('Saving checkpoint to %s' % checkpoint_path)
                     max_avg_act_reward = max(max_avg_act_reward, avg_reward)
                     print('\n [#] Up-to-now, the max action reward is %.4f \n --------------- ' %(max_avg_act_reward))
+                    self.memory.save()
 
 
 
@@ -157,18 +216,24 @@ if __name__ == '__main__':
     # data params
 
     parser.add_argument('-vocab_json', default='../data/vocab.json')
+    parser.add_argument(
+        '-mode',
+        default='train',
+        type=str,
+        choices=['train', 'eval', 'train+eval'])
 
 
     #memory params
-    parser.add_argument('-memory_dir',default='/memory')
+    parser.add_argument('-memory_dir',default='../data/memory')
     parser.add_argument('-memory_size',default=4000)   #100 scene* 40 question
-    parser.add_argument('-batch_size',default=32)
+    parser.add_argument('-batch_size',default=16)
+    parser.add_argument('-first_train',default=True,type=bool)
 
 
     # optim params
     parser.add_argument('-learning_rate', default=1e-3, type=float)
     parser.add_argument('-target_q_update_step', default=100, type=int)
-    parser.add_argument('-epsilon', default=0.2, type=float)
+    parser.add_argument('-epsilon', default=0.2,type=float)
     parser.add_argument('-discount', default=0.6, type=float)
     parser.add_argument('-max_step', default=5, type=int)
 
@@ -179,29 +244,19 @@ if __name__ == '__main__':
     parser.add_argument('-eval_every', default=10, type=int)
     parser.add_argument('-save_every', default=200, type=int) #optional if you would like to save specific epochs as opposed to relying on the eval thread
     parser.add_argument('-model', default='act')
-    parser.add_argument('-num_processes', default=1, type=int)
-    parser.add_argument('-max_threads_per_gpu', default=10, type=int)
+
 
     # checkpointing
-    parser.add_argument('-checkpoint_path', default=False)
-    parser.add_argument('-checkpoint_dir', default='checkpoints/act/')
+    parser.add_argument('-checkpoint_name', default='')
+    parser.add_argument('-checkpoint_dir', default='../data/checkpoints/act/')
     parser.add_argument('-log_dir', default='logs/act/')
-    parser.add_argument('-log', default=False, action='store_true')
-    parser.add_argument('-cache', default=False, action='store_true')
-    parser.add_argument('-max_controller_actions', type=int, default=5)
-    parser.add_argument('-max_actions', type=int)
     args = parser.parse_args()
-    
-    args.train_h5 = os.path.abspath(args.train_h5)
     args.time_id = time.strftime("%m_%d_%H:%M")
 
     #MAX_CONTROLLER_ACTIONS = args.max_controller_actions
 
     if not os.path.isdir(args.log_dir):
         os.makedirs(args.log_dir)
-
-    if args.curriculum:
-        assert 'lstm' in args.model_type #TODO: Finish implementing curriculum for other model types
 
     logging.basicConfig(filename=os.path.join(args.log_dir, "run_{}.log".format(
                                                 str(datetime.now()).replace(' ', '_'))),
@@ -216,27 +271,11 @@ if __name__ == '__main__':
         logging.info("CPU not supported")
         exit()
 
-    if args.checkpoint_path != False:
-
-        print('Loading checkpoint from %s' % args.checkpoint_path)
-        logging.info("Loading checkpoint from {}".format(args.checkpoint_path))
-
-        args_to_keep = ['model_type']
-
-        checkpoint = torch.load(args.checkpoint_path, map_location={
-            'cuda:0': 'cpu'
-        })
-
-        for i in args.__dict__:
-            if i not in args_to_keep:
-                checkpoint['args'][i] = args.__dict__[i]
-
-        args = type('new_dict', (object, ), checkpoint['args'])
 
     args.checkpoint_dir = os.path.join(args.checkpoint_dir,
-                                       args.time_id + '_' + args.identifier)
+                                       args.time_id + '_' + args.model)
     args.log_dir = os.path.join(args.log_dir,
-                                args.time_id + '_' + args.identifier)
+                                args.time_id + '_' + args.model)
 
     print(args.__dict__)
     logging.info(args.__dict__)
@@ -246,65 +285,24 @@ if __name__ == '__main__':
         os.makedirs(args.log_dir)
 
 
-    if args.model_type == 'nomap':
+    dqn_env = environment.Environment()
 
-        model_kwargs = {'question_vocab': load_vocab(args.vocab_json)}
-        shared_model = actPlannerBaseModel(**model_kwargs)
+    model_kwargs = {'args':args,'environment':dqn_env}
+    act_model =  DQN_Agent(**model_kwargs)
 
-    elif args.model_type == 'addmap':
-
-        model_kwargs = {'question_vocab': load_vocab(args.vocab_json)}
-        shared_model = actPlannerImproveModel(**model_kwargs)
-        act_checkpoint = torch.load("act_load.pt")     #load checkpoint weights
-        shared_model.load_state_dict(act_checkpoint['state'])   #create model
-
-    else:
-
-        exit()
-
-    shared_model.share_memory()
-
-    if args.checkpoint_path != False:
-        print('Loading params from checkpoint: %s' % args.checkpoint_path)
-        logging.info("Loading params from checkpoint: {}".format(args.checkpoint_path))
-        shared_model.load_state_dict(checkpoint['state'])
-
-    if args.mode == 'eval':
-
-        eval(0, args, shared_model)
-
-    elif args.mode == 'train':
-
-        if args.num_processes > 1:
-            processes = []
-            for rank in range(0, args.num_processes):
-                # for rank in range(0, args.num_processes):
-                p = mp.Process(target=train, args=(rank, args, shared_model))
-                p.start()
-                processes.append(p)
-
-            for p in processes:
-                p.join()
-
+    if args.mode == 'train':
+        if args.first_train:
+            act_model.train()
         else:
-            train(0, args, shared_model)
+            checkpoint_file =  os.path.join(args.checkpoint_dir, args.checkpoint_name)
+            act_checkpoint = torch.load(checkpoint_file)
+            act_model.eval_net.load_state_dict(act_checkpoint['state'])
+            act_model.target_net.load_state_dict(act_checkpoint['state'])
+            act_model.optimizer.load_state_dict(act_checkpoint['optimizer'])    # load check_point
+            act_model.memory.load()   #load memory    
+
+            act_model.train()     
 
 
-    else:
-        processes = []
 
-        # Start the eval thread
-        p = mp.Process(target=eval, args=(0, args, shared_model))
-        p.start()
-        processes.append(p)
-
-        # Start the training thread(s)
-        for rank in range(1, args.num_processes + 1):
-            # for rank in range(0, args.num_processes):
-            p = mp.Process(target=train, args=(rank, args, shared_model))
-            p.start()
-            processes.append(p)
-
-        for p in processes:
-            p.join()
 

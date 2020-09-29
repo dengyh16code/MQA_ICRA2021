@@ -254,7 +254,7 @@ class Camera(object):
         return location
 
 class UR5(object):
-    def __init__(self,testing_file='table-10-obj-01.txt',obj_num=20):
+    def __init__(self,testing_file='table-00-scene-00.txt',obj_num=20):
         #test
         self.testing_file = testing_file
         self.targetPosition = np.zeros(3,dtype = np.float)
@@ -546,8 +546,6 @@ class UR5(object):
             else:
                 obj_type =  self.obj_dict[order]['name']
                 obj_type = obj_type[:-5]
-                if obj_type is 'coin' or obj_type is 'key':
-                    continue
                 cal_rect = self.obj_dict[order]['rect']
                 if not target_rect.intersection(cal_rect): # no overlap
                     continue
@@ -569,7 +567,7 @@ class Environment(object):
     """
          simulation environment 
     """
-    def __init__(self,testing_file='group-00-obj-00.txt',obj_num =20 ):
+    def __init__(self,testing_file='group-00-scene-00.txt',obj_num =20 ):
 
         # initial the ur5 arm in simulation
         self.obj_num = obj_num
@@ -588,13 +586,20 @@ class Environment(object):
 
         scene_name = 'group-'+ '0'+str(group_num) + '-scene-'+'0'+ str(scene_num) + '.txt'
 
-        ques_file_name =  'group-'+ '0'+str(group_num) + '-scene-'+'0'+ str(scene_num) + '-encodeques'+'.json'
-        ques_file_dir = os.path.abspath('encode_ques/')
+        ques_encode_file_name =  'group-'+ '0'+str(group_num) + '-scene-'+'0'+ str(scene_num) + '-encodeques'+'.json'
+        ques_encode_file_dir = os.path.abspath('../data/encode_ques/')
+        ques_encode_full_file = os.path.join(ques_encode_file_dir, ques_encode_file_name)
+        ques_encode_file = open(ques_encode_full_file,'r',encoding = 'utf-8')
+        all_encode_ques = json.load(ques_encode_file)
+
+        ques_file_name =  'group-'+ '0'+str(group_num) + '-scene-'+'0'+ str(scene_num) + '-ques'+'.json'
+        ques_file_dir = os.path.abspath('../data/ques/')
         ques_full_file = os.path.join(ques_file_dir, ques_file_name)
-        all_ques = json.load(ques_full_file)
+        ques_file = open(ques_full_file,'r',encoding = 'utf-8')
+        all_ques = json.load(ques_file)
 
         self.close()
-        self.obj_num = scene_num/3 * 15 + 20
+        self.obj_num = int(scene_num/3) * 15 + 20
 
         self.ur5 = UR5(testing_file=scene_name,obj_num=self.obj_num)
         self.ur5.ankleinit()
@@ -608,26 +613,33 @@ class Environment(object):
         print('\n [*] Initialize the simulation environment')
 
         depth_img,rgb_img =  self.camera.get_camera_data()
-        reward =0 
-        return rgb_img, depth_img,reward, all_ques
+        return rgb_img, depth_img, all_ques,all_encode_ques
 
 
 
 
-    def act(self,action,target_name):   #1:push 2:suck 3:loose
+    def act(self,action_location,target_name,ques_type):   #1:push 2:suck 3:loose
+        action_loca = int(action_location[0])
+        loca_ori = action_loca // (28*28)
+        loca_x = (action_loca % (28*28))//28
+        loca_y = (action_loca % (28*28))%28
+        action = [loca_ori,loca_x,loca_y]   
         overlap_list_before = []
         overlap_list_after = []
         target_index =  [i for i,x in enumerate(self.ur5.test_obj_type) if x == target_name]
 
         push_depth=-0.1
-        start_point = [action[0],action[1]]
-        end_point = [action[2],action[3]]
+        push_dis = 224/4
+        ori = action[0]*math.pi/4
+        start_point = [action[1],action[2]]
+        end_point = [(action[1] + push_dis * math.cos(ori))%224,(action[2] + push_dis * math.sin(ori))%224]
         move_begin = self.camera.pixel2world(start_point[0], start_point[1], push_depth)
         move_to = self.camera.pixel2world(end_point[0], end_point[1], push_depth)
         
 
         for one_target_index in target_index:
-            overlap_list_before.append(self.ur5.check_overlap(one_target_index,self.obj_dic))
+            overlap_rate,_ = self.ur5.check_overlap(one_target_index,self.obj_dic)
+            overlap_list_before.append(overlap_rate)
 
         self.ur5.ur5push(move_begin,move_to)
         time.sleep(2)
@@ -636,11 +648,32 @@ class Environment(object):
 
 
         for one_target_index in target_index:
-            overlap_list_after.append(self.ur5.check_overlap(one_target_index,self.obj_dic))
+            overlap_rate,_ = self.ur5.check_overlap(one_target_index,self.obj_dic)
+            overlap_list_after.append(overlap_rate)
 
-        reward = (min(overlap_list_before) - min(overlap_list_after)) / overlap_list_before
+        if ques_type in ['exist_negative','exist_positive']:
+        
+            if len(overlap_list_before) == 0:
+                terminal = 1
+            else:
+                terminal = int(min(overlap_list_before)< 0.1)
+            
+            if terminal:
+                reward = 0
+            else:
+                reward = (min(overlap_list_before) - min(overlap_list_after)) / min(overlap_list_before)
 
-        terminal = min(overlap_list_after)< 0.2
+        elif ques_type in ['count_negative','count_positive']:
+        
+            if len(overlap_list_before) == 0:
+                terminal = 1
+            else:
+                terminal = int(max(overlap_list_before)< 0.1)
+            
+            if terminal:
+                reward = 0
+            else:
+                reward = (max(overlap_list_before) - max(overlap_list_after)) / max(overlap_list_before)
 
         depth_image_after,rgb_image_after = self.camera.get_camera_data()
 

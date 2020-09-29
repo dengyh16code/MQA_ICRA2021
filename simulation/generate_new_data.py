@@ -9,7 +9,7 @@ from collections import defaultdict
 import array
 import json
 import cv2 as cv
-from enviroment  import Environment
+from environment  import Environment
 from generate_questions import Question
 
 '''
@@ -32,7 +32,7 @@ class scene(object):
         self.ques_full_file = os.path.join(ques_file_dir, self.ques_file_name)
 
         self.encode_ques_file_name =  'group-' + group_order + '-scene-' + scene_order + '-encodeques'+'.json'
-        encode_ques_file_dir = os.path.abspath('../data/encodeques/')
+        encode_ques_file_dir = os.path.abspath('../data/encode_ques/')
         self.encode_ques_full_file = os.path.join(encode_ques_file_dir, self.encode_ques_file_name)
         self.vocab_dir =  os.path.abspath("../data/vocab.json")
         vocab_file = open(self.vocab_dir,'r',encoding='utf-8')

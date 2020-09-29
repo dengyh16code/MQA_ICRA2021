@@ -1,9 +1,10 @@
-
 import sys
 import os
 import random
 import logging
 import numpy as np
+from torch.autograd import Variable
+from torch.autograd import Variable
 
 
 class ReplayMemory:
@@ -13,16 +14,15 @@ class ReplayMemory:
     def __init__(self, args):
 
         self.memory_dir = args.memory_dir
-
         self.memory_size = args.memory_size
         self.actions = np.empty(self.memory_size, dtype = np.uint8)
         self.rewards = np.empty(self.memory_size, dtype = np.float16)
         self.questions = np.empty((self.memory_size,10), dtype = np.uint8)
         self.rgbs = np.empty((self.memory_size, 3, 224, 224), dtype = np.float16)
         self.rgbs_1 = np.empty((self.memory_size, 3, 224, 224), dtype = np.float16)
-        self.depths = np.empty((self.memory_size, 1, 224, 224), dtype = np.float16)
-        self.depths_1 = np.empty((self.memory_size, 1, 224, 224), dtype = np.float16)
-        self.terminals = np.empty(self.memory_size, dtype = np.bool) # end or not
+        self.depths = np.empty((self.memory_size, 3, 224, 224), dtype = np.float16)
+        self.depths_1 = np.empty((self.memory_size, 3, 224, 224), dtype = np.float16)
+        self.terminals = np.empty(self.memory_size, dtype =np.uint8) # end or not
 
         self.batch_size = args.batch_size
         self.current = 0
@@ -62,6 +62,8 @@ class ReplayMemory:
         depths_1 = self.depths_1[indexes]
 
         return rgbs, depths, rgbs_1, depths_1, questions,actions, rewards, terminals
+
+
 
     def save(self):
         for idx, (name, array) in enumerate(

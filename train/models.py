@@ -10,6 +10,7 @@ import torchvision
 from torch.autograd import Variable
 import scipy.sparse as sp
 import numpy as np
+import os
 
 def get_state(m):
     if m is None:
@@ -72,17 +73,18 @@ class QuestionLstmEncoder(nn.Module):    #output 128
 
 class RGBD_Encoder(nn.Module):
     def __init__(self,
-               num_classes=32,     
-               checkpoint_path='models/resnet101.pth'
+               num_classes=32, 
+               checkpoint_path_local= '../data/models/resnet101.pth'
     ):
         super(RGBD_Encoder, self).__init__()
 
+        checkpoint_path = os.path.abspath(checkpoint_path_local)
         self.num_classes = num_classes
         res_model = torchvision.models.resnet101(pretrained=False)
         #print(res_model)
         res_model.load_state_dict(torch.load(checkpoint_path))
         
-        self.rgb_layer = torch.nn.Sequential(*list(res_model.children())[:-4])    #remove fc layer  output:224*224*512
+        self.rgb_layer = torch.nn.Sequential(*list(res_model.children())[:-4])    #remove fc layer
         
         
         res_model1 =  torchvision.models.resnet101(pretrained=False)
@@ -96,12 +98,10 @@ class RGBD_Encoder(nn.Module):
 
         self.conv_layer = nn.Sequential(
             nn.Conv2d(1024,512,1),
-            nn.Conv2d(512,128,1),            
+            nn.Conv2d(512,128,1),
             nn.Conv2d(128,self.num_classes,1),
-            nn.ReLU(inplace=True)
+            nn.ReLU()
         )
-
-        self.pool_layer = nn.AvgPool2d(7,7)    #32*32*32
 
         for param in self.rgb_layer[1].parameters():  #fix bn
             param.requires_grad = False
@@ -118,15 +118,16 @@ class RGBD_Encoder(nn.Module):
         output1 = self.rgb_layer(rgb_image)
         output2 = self.depth_layer(depth_image)
         input_conv = torch.cat([output1, output2], 1)
-        output_conv = self.conv_layer(input_conv)
-        output = self.pool_layer(output_conv)
+        output = self.conv_layer(input_conv)
+
         return output
+        
 
 
 class act_model(torch.nn.Module):
     def __init__(self,
                 vocab,
-                checkpoint_path='models/resnet101.pth',
+                checkpoint_path='../data/models/resnet101.pth',
                 question_wordvec_dim=64,
                 question_hidden_dim=64,
                 question_num_layers=2,
@@ -135,7 +136,7 @@ class act_model(torch.nn.Module):
 
         super(act_model, self).__init__()
 
-        rgbd_kwargs = {'num_classes': 32,  'checkpoint_path':checkpoint_path}
+        rgbd_kwargs = {'num_classes': 32,  'checkpoint_path_local':checkpoint_path}
         self.rgbd_encode_model = RGBD_Encoder(**rgbd_kwargs)
 
         q_rnn_kwargs = {
@@ -147,24 +148,32 @@ class act_model(torch.nn.Module):
         }
         self.question_encode_model = QuestionLstmEncoder(**q_rnn_kwargs)
 
-        self.question_linear = nn.Linear(128,32)
+        self.ques_tr = nn.Sequential(
+            nn.Linear(question_hidden_dim, 32),
+            nn.ReLU(),
+            nn.Dropout(p=0.5))
+
         pointwise_in_channels = 32 + 32   #qustion + rgbd
+        self.pointwise = nn.Sequential(
+            nn.Conv2d(pointwise_in_channels,32,1),
+            nn.Conv2d(32,16,1),
+            nn.Conv2d(16,8,1),
+            nn.ReLU(),
+            nn.Dropout(p=0.5)
+        )
         self.pointwise = nn.Conv2d(pointwise_in_channels, 8, 1, 1)
 
 
     def forward(self,rgb_image, depth_image,ques):
-        image_embedding = self.rgbd_encode_model(rgb_image,depth_image)   #32*32*32
+        image_embedding = self.rgbd_encode_model(rgb_image,depth_image)   #32*28*28
 
         question_embedding = self.question_encode_model(ques)
-        question_linear = self.question_linear(question_embedding)
-        question_reshaped = question_linear.view(1, 32, 1, 1).repeat(1, 1, 32, 32) #32*32*32
+        question_linear = self.ques_tr(question_embedding)
+        question_reshaped = question_linear.view(-1, 32, 1, 1).repeat(1, 1, 28, 28) #32*28*28
 
-
-        x = torch.cat((image_embedding, question_reshaped), dim=1)  #64*32*32
-        x = F.relu(self.pointwise(x))
-        x = self.dropout(x)    #8*32*32
-
-        return x
+        x = torch.cat((image_embedding, question_reshaped), dim=1)  #64*28*28
+        output = self.pointwise(x) #8*28*28
+        return output
 
 # ----------- vqa -----------
 def build_mlp(input_dim,
@@ -199,7 +208,7 @@ class MultitaskCNN(nn.Module):
             self,
             num_classes=191,
             pretrained=True,
-            checkpoint_path='models/03_13_h3d_hybrid_cnn.pt'
+            checkpoint_path='..data/models/03_13_h3d_hybrid_cnn.pt'
     ):
         super(MultitaskCNN, self).__init__()
 
@@ -250,8 +259,9 @@ class MultitaskCNN(nn.Module):
         self.pretrained = pretrained
         if self.pretrained == True:
             print('Loading CNN weights from %s' % checkpoint_path)
+            checkpoint_path_abs = os.path.abspath(checkpoint_path)
             checkpoint = torch.load(
-                checkpoint_path, map_location={'cuda:0': 'cpu'})
+                checkpoint_path_abs, map_location={'cuda:0': 'cpu'})
             self.load_state_dict(checkpoint['model_state'])
             for param in self.parameters():
                 param.requires_grad = False
@@ -278,7 +288,7 @@ class MultitaskCNN(nn.Module):
 class VqaLstmCnnAttentionModel(nn.Module):
     def __init__(self,
                  vocab,
-                 checkpoint_path='models/03_13_h3d_hybrid_cnn.pt',
+                 checkpoint_path='../data/models/03_13_h3d_hybrid_cnn.pt',
                  image_feat_dim=64,
                  question_wordvec_dim=64,
                  question_hidden_dim=64,
