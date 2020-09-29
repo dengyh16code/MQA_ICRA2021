@@ -238,8 +238,15 @@ class Camera(object):
             from pixel u,v and correspondent depth z -> coor in world coordinate (x,y,z)
             
         """
-        u = int(u)%256
-        v = int(v)%256
+        if u >0:
+            u = int(u)%224
+        else:
+            u = 0
+
+        if v>0:
+            v = int(v)%224
+        else:
+            v= 0
 
         depth = self.cur_depth[int(u)][int(v)] / self.depth_scale
         x = depth * (u - self.intri[0][2]) / self.intri[0][0]
@@ -619,20 +626,18 @@ class Environment(object):
 
 
     def act(self,action_location,target_name,ques_type):   #1:push 2:suck 3:loose
-        action_loca = int(action_location[0])
-        loca_ori = action_loca // (28*28)
-        loca_x = (action_loca % (28*28))//28
-        loca_y = (action_loca % (28*28))%28
-        action = [loca_ori,loca_x,loca_y]   
+        loca_ori = action_location // (28*28)
+        loca_x = (action_location % (28*28))//28
+        loca_y = (action_location % (28*28))%28
+        action = [loca_ori,8*loca_x,8*loca_y]
         overlap_list_before = []
         overlap_list_after = []
         target_index =  [i for i,x in enumerate(self.ur5.test_obj_type) if x == target_name]
-
         push_depth=-0.1
         push_dis = 224/4
         ori = action[0]*math.pi/4
         start_point = [action[1],action[2]]
-        end_point = [(action[1] + push_dis * math.cos(ori))%224,(action[2] + push_dis * math.sin(ori))%224]
+        end_point = [(action[1] + push_dis * math.cos(ori)),(action[2] + push_dis * math.sin(ori))]
         move_begin = self.camera.pixel2world(start_point[0], start_point[1], push_depth)
         move_to = self.camera.pixel2world(end_point[0], end_point[1], push_depth)
         
@@ -643,7 +648,7 @@ class Environment(object):
 
         self.ur5.ur5push(move_begin,move_to)
         time.sleep(2)
-        print('\n -- Push from {} to {}' .format(start_point,end_point))
+        #print('\n -- Push from {} to {}' .format(start_point,end_point))
         self.obj_dic = self.ur5.get_obj_positions_and_orientations()   #take action and update obj_dic
 
 

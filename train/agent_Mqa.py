@@ -44,7 +44,11 @@ class DQN_Agent(object):
 
         # initialize the parameter of DQN
         self.target_q_update_step = args.target_q_update_step
-        self.epsilon = args.epsilon
+        
+        self.epsilon_start = args.epsilon_start
+        self.epsilon_end = args.epsilon_end
+        self.epsilon_update_step = args.epsilon_update_step
+
         self.discount = args.discount
         self.learning_rate = args.learning_rate
         self.max_step = args.max_step
@@ -79,7 +83,11 @@ class DQN_Agent(object):
         return dep_rep
 
     def choose_action(self,rgb_image,depth_image,ques):
-        if np.random.uniform() > self.epsilon:   # greedy
+        if self.learn_step_counter > self.epsilon_update_step:
+            epsilon = self.epsilon_end
+        else:
+            epsilon = self.epsilon_start-(self.learn_step_counter / float(self.epsilon_update_step)) *(self.epsilon_start-self.epsilon_end)
+        if np.random.uniform() > epsilon:   # greedy
             actions_value = self.eval_net.forward(rgb_image,depth_image,ques)
             action_reshape = actions_value.view(1,-1)
             action_location = torch.max(action_reshape,1)[1].cpu().data.numpy()
@@ -96,6 +104,7 @@ class DQN_Agent(object):
         """
         if self.learn_step_counter % self.target_q_update_step == 0:
             self.target_net.load_state_dict(self.eval_net.state_dict())  #update target_net's parameters
+            logging.info("updtate target q")
         self.learn_step_counter += 1
 
         rgbs,depths, rgbs_1, depths_1,questions,actions,rewards,terminals = self.memory.sample()
@@ -123,7 +132,6 @@ class DQN_Agent(object):
  
         loss = self.loss_func(q_eval, q_target)
 
-        print("loss:",loss)
 
         self.optimizer.zero_grad()
         loss.backward()
@@ -132,7 +140,6 @@ class DQN_Agent(object):
         self.task_total_loss += loss.item()
         self.task_total_q += q_target.mean()
         self.update_count += 1 
-        self.learn_step_counter +=1 #
 
 
 
@@ -146,12 +153,17 @@ class DQN_Agent(object):
         self.target_net.cuda()
 
         self.update_count = 0
-        self.learn_step_counter = 0
+        self.learn_step_counter = 579
         task_total_reward, self.task_total_loss, self.task_total_q = 0., 0., 0.
         max_avg_act_reward = 0
 
-        for group_num in range(self.test_group_num):  # one eposide
-            for scene_num in range(10):
+        group_num_list = list(range(self.test_group_num))
+        random.shuffle(group_num_list)
+        scene_num_list = list(range(10))
+        random.shuffle(scene_num_list)
+        
+        for group_num in group_num_list:  # one eposide
+            for scene_num in scene_num_list:
                 rgb_image_raw,depth_image_raw,all_ques,all_encode_ques = self.env.new_scene(group_num = group_num,scene_num = scene_num)      #new scene
                 
                 rgb_image = self.rgb_norm(rgb_image_raw)
@@ -165,6 +177,7 @@ class DQN_Agent(object):
                     self.task_total_q = 0
                     self.update_count = 0
                     task_act_num =0
+                    print("target:",single_ques['obj'])
                     for act_step in range(self.max_step):
 
                         # 1. predict
@@ -181,7 +194,7 @@ class DQN_Agent(object):
                         
                         rgb_1_image = self.rgb_norm(rgb_1_image_raw)
                         depth_1_image = self.depth_norm(depth_1_image_raw)
-                        print("target:",single_ques['obj'])
+
                         # 3. observe & store
                         self.memory.add(rgb_image, depth_image, rgb_1_image, depth_1_image,single_encode_ques,action,reward,terminal)
                         # 4. learn
@@ -196,18 +209,30 @@ class DQN_Agent(object):
 
                     avg_reward = task_total_reward / task_act_num       # caculate the average reward after one task
                     avg_loss = self.task_total_loss / self.update_count 
-                    avg_q = self.task_total_q / self.update_count 
+                    avg_q = self.task_total_q / self.update_count
+                    print("avg_loss:",avg_loss)
+                    print("avg_reward:",avg_reward) 
+                    logging.info("avg_reward:{}".format(avg_reward))
+                    logging.info("avg_loss:{}".format(avg_loss))
+                    logging.info("avg_q:{}".format(avg_q))
+
+                    if  0.9*avg_reward > max_avg_act_reward:   #avg_reward相当于在新的场景测试集上的test score
+                        checkpoint = {'state': get_state(self.eval_net),
+                        'optimizer': self.optimizer.state_dict()}
+                        checkpoint_t = {'state': get_state(self.target_net)}
+
+                        checkpoint_path = '%s/step_%d.pt' % (self.args.checkpoint_dir, self.learn_step_counter)
+                        torch.save(checkpoint, checkpoint_path)
+
+                        checkpoint_path_t = '%s/t_step_%d.pt' % (self.args.checkpoint_dir, self.learn_step_counter)
+                        torch.save(checkpoint_t, checkpoint_path_t)
 
 
-                if  0.8*avg_reward > max_avg_act_reward:   #avg_reward相当于在新的场景测试集上的test score
-                    checkpoint = {'state': get_state(self.eval_net),
-                    'optimizer': self.optimizer.state_dict()}
-                    checkpoint_path = '%s/step_%d.pt' % (self.args.checkpoint_dir, self.learn_step_counter)
-                    torch.save(checkpoint, checkpoint_path)
-                    print('Saving checkpoint to %s' % checkpoint_path)
-                    max_avg_act_reward = max(max_avg_act_reward, avg_reward)
-                    print('\n [#] Up-to-now, the max action reward is %.4f \n --------------- ' %(max_avg_act_reward))
-                    self.memory.save()
+                        print('Saving checkpoint to %s' % checkpoint_path)
+                        max_avg_act_reward = max(max_avg_act_reward, avg_reward)
+                        print('\n [#] Up-to-now, the max action reward is %.4f \n --------------- ' %(max_avg_act_reward))
+                        logging.info("max action reward:{}".format(max_avg_act_reward))
+                        self.memory.save()
 
 
 
@@ -225,15 +250,18 @@ if __name__ == '__main__':
 
     #memory params
     parser.add_argument('-memory_dir',default='../data/memory')
-    parser.add_argument('-memory_size',default=4000)   #100 scene* 40 question
+    parser.add_argument('-memory_size',default=1000)   #100 scene* 40 question
     parser.add_argument('-batch_size',default=16)
-    parser.add_argument('-first_train',default=True,type=bool)
+    parser.add_argument('-first_train',default=False,type=bool)
 
 
     # optim params
     parser.add_argument('-learning_rate', default=1e-3, type=float)
     parser.add_argument('-target_q_update_step', default=100, type=int)
-    parser.add_argument('-epsilon', default=0.2,type=float)
+    parser.add_argument('-epsilon_start', default=1,type=float)
+    parser.add_argument('-epsilon_end', default=0.1,type=float)
+    parser.add_argument('-epsilon_update_step', default=2000,type=float)  #memory / 2
+
     parser.add_argument('-discount', default=0.6, type=float)
     parser.add_argument('-max_step', default=5, type=int)
 
@@ -247,7 +275,7 @@ if __name__ == '__main__':
 
 
     # checkpointing
-    parser.add_argument('-checkpoint_name', default='')
+    parser.add_argument('-checkpoint_name', default='step_579.pt')
     parser.add_argument('-checkpoint_dir', default='../data/checkpoints/act/')
     parser.add_argument('-log_dir', default='logs/act/')
     args = parser.parse_args()
