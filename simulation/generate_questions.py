@@ -17,9 +17,9 @@ class Question():
 
         self.blacklist_objects =[
             'book', 'bottle', 'calclator','can','card',
-            'key', 'keyboard', 'mouse', 'pen','phone',
-            'clock','coin','cube','cup','gamepad',
-            'pin','roller','scissors','usb','wallet'
+            'charger','key', 'keyboard', 'mouse', 'pen',
+            'phone','clock','cube','cup','gamepad',
+            'eraser','screwdriver','scissors','usb','wallet'
         ]
 
 

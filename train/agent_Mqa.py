@@ -52,9 +52,9 @@ class DQN_Agent(object):
         self.discount = args.discount
         self.learning_rate = args.learning_rate
         self.max_step = args.max_step
+        self.learn_step_counter = args.learn_step
 
-        self.weight_dir = r'./dqn/weights'
-        self.action_num = 28*28*8
+        self.action_num = 28*28*9
         self.env = environment
         self.memory = ReplayMemory(self.args)
         self.optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, self.eval_net.parameters()), lr= self.learning_rate)
@@ -119,11 +119,11 @@ class DQN_Agent(object):
         terminals_var = Variable(torch.FloatTensor(terminals).cuda())
 
         q_eval_matrix = self.eval_net(rgbs_var,depths_var,questions_var)
-        q_eval_matrix = q_eval_matrix.view(-1,8*28*28)
+        q_eval_matrix = q_eval_matrix.view(-1,9*28*28)
         q_eval = torch.max(q_eval_matrix,1)[0]
 
         q_next_matrix = self.target_net(rgbs_1_var,depths_1_var,questions_var).detach()  #don't backward
-        q_next_matrix = q_next_matrix.view(-1,8*28*28)
+        q_next_matrix = q_next_matrix.view(-1,9*28*28)
         q_next = torch.max(q_next_matrix,1)[0]
 
         one_var = Variable(torch.ones_like(terminals_var))
@@ -147,15 +147,16 @@ class DQN_Agent(object):
         """
             -- Train Model Process
         """
+        torch.cuda.set_device(args.gpus.index(args.gpus[0 % len(args.gpus)]))
+
         self.eval_net.train()
         self.eval_net.cuda()
         self.target_net.eval()
         self.target_net.cuda()
 
         self.update_count = 0
-        self.learn_step_counter = 579
         task_total_reward, self.task_total_loss, self.task_total_q = 0., 0., 0.
-        max_avg_act_reward = 0
+        max_avg_act_reward = 0.33
 
         group_num_list = list(range(self.test_group_num))
         random.shuffle(group_num_list)
@@ -246,6 +247,12 @@ if __name__ == '__main__':
         default='train',
         type=str,
         choices=['train', 'eval', 'train+eval'])
+    
+    parser.add_argument(
+        '-reward_type',
+        default='avg',
+        type=str,
+        choices=['avg', 'avg+local', 'local'])
 
 
     #memory params
@@ -253,17 +260,19 @@ if __name__ == '__main__':
     parser.add_argument('-memory_size',default=1000)   #100 scene* 40 question
     parser.add_argument('-batch_size',default=16)
     parser.add_argument('-first_train',default=False,type=bool)
-
+    parser.add_argument('-learn_step',default=0,type=int)
 
     # optim params
     parser.add_argument('-learning_rate', default=1e-3, type=float)
     parser.add_argument('-target_q_update_step', default=100, type=int)
     parser.add_argument('-epsilon_start', default=1,type=float)
     parser.add_argument('-epsilon_end', default=0.1,type=float)
+    parser.add_argument('-reward_weight_start', default=1,type=float)
+    parser.add_argument('-reward_weight_end', default=0.1,type=float)
     parser.add_argument('-epsilon_update_step', default=2000,type=float)  #memory / 2
 
     parser.add_argument('-discount', default=0.6, type=float)
-    parser.add_argument('-max_step', default=5, type=int)
+    parser.add_argument('-max_step', default=10, type=int)
 
 
 
@@ -322,11 +331,16 @@ if __name__ == '__main__':
         if args.first_train:
             act_model.train()
         else:
-            checkpoint_file =  os.path.join(args.checkpoint_dir, args.checkpoint_name)
+            checkpoint_file = 'step_616.pt'
+            args.learn_step = 616
             act_checkpoint = torch.load(checkpoint_file)
             act_model.eval_net.load_state_dict(act_checkpoint['state'])
             act_model.target_net.load_state_dict(act_checkpoint['state'])
             act_model.optimizer.load_state_dict(act_checkpoint['optimizer'])    # load check_point
+            for state in act_model.optimizer.state.values():
+                for k, v in state.items():
+                    if isinstance(v, torch.Tensor):
+                        state[k] = v.cuda()
             act_model.memory.load()   #load memory    
 
             act_model.train()     

@@ -33,18 +33,20 @@ class scene(object):
 
         self.encode_ques_file_name =  'group-' + group_order + '-scene-' + scene_order + '-encodeques'+'.json'
         encode_ques_file_dir = os.path.abspath('../data/encode_ques/')
+        
         self.encode_ques_full_file = os.path.join(encode_ques_file_dir, self.encode_ques_file_name)
         self.vocab_dir =  os.path.abspath("../data/vocab.json")
         vocab_file = open(self.vocab_dir,'r',encoding='utf-8')
         self.vocab = json.load(vocab_file)
+        
         self.scene_diff = scene_diff
 
 
         self.all_obj =[
             'book', 'bottle', 'calclator','can','card',
-            'key', 'keyboard', 'mouse', 'pen','phone',
-            'clock','coin','cube','cup','gamepad',
-            'pin','roller','scissors','usb','wallet'
+            'charger','key', 'keyboard', 'mouse', 'pen',
+            'phone','clock','cube','cup','gamepad',
+            'eraser','screwdriver','scissors','usb','wallet'
         ]
 
 
@@ -123,6 +125,7 @@ class scene(object):
         json.dump(all_ques, open(self.ques_full_file, 'w'))
 
         # encode the question
+        
         encode_questions = []
         for single_ques in all_ques:
             singe_question = single_ques['question']
@@ -150,9 +153,9 @@ class scene(object):
 
 
 group_order='00'     #'00'-'09'
-scene_order ='07'    #'00'-'02'  '03'-'05'  '06'-'09'
+scene_order ='00'    #'00'-'02'  '03'-'05'  '06'-'09'
 scene_diff = 0      #     0         1           2
-my_scene = scene(group_order=group_order,scene_order=scene_order,scene_diff=2)
+my_scene = scene(group_order=group_order,scene_order=scene_order,scene_diff=scene_diff)
 
                         
              

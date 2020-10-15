@@ -13,7 +13,7 @@ class ReplayMemory:
     """
     def __init__(self, args):
 
-        self.memory_dir = args.memory_dir
+        self.memory_dir = os.path.abspath(args.memory_dir)
         self.memory_size = args.memory_size
         self.actions = np.empty(self.memory_size, dtype = np.uint8)
         self.rewards = np.empty(self.memory_size, dtype = np.float16)
@@ -77,6 +77,6 @@ class ReplayMemory:
         for idx, (name, array) in enumerate(
             zip(['rgbs','depths','rgbs1','depths1','questions','actions', 'rewards', 'terminals','current'],
                 [self.rgbs, self.depths, self.rgbs_1,self.depths_1,self.questions,self.actions,self.rewards, self.terminals,self.current])):
-            path = os.path.join(self.memory_dir, name)            
+            path = os.path.join(self.memory_dir, (name+'.npy'))            
             array = np.load(path)
             print("[*] load %s" %path)
