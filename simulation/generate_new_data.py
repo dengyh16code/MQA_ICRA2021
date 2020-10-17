@@ -24,7 +24,7 @@ hard scene: 50 objects.2
 class scene(object):
     def __init__(self, group_order='00',scene_order ='00',scene_diff=0):
         self.output_file='group-'+group_order + '-scene-'+scene_order + '.txt'
-        output_file_dir = os.path.abspath('../data/test-cases/')
+        output_file_dir = os.path.abspath('../data/test_cases/')
         self.output_preset_file = os.path.join(output_file_dir, self.output_file)
 
         self.ques_file_name =  'group-' + group_order + '-scene-' + scene_order + '-ques'+'.json'
@@ -152,7 +152,7 @@ class scene(object):
 
 
 
-group_order='00'     #'00'-'09'
+group_order='09'     #'00'-'09'
 scene_order ='00'    #'00'-'02'  '03'-'05'  '06'-'09'
 scene_diff = 0      #     0         1           2
 my_scene = scene(group_order=group_order,scene_order=scene_order,scene_diff=scene_diff)

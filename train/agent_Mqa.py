@@ -49,6 +49,10 @@ class DQN_Agent(object):
         self.epsilon_end = args.epsilon_end
         self.epsilon_update_step = args.epsilon_update_step
 
+        self.reward_type = args.reward_type
+        self.reward_weight_start = args.reward_weight_start
+        self.reward_weight_end = args.reward_weight_end
+
         self.discount = args.discount
         self.learning_rate = args.learning_rate
         self.max_step = args.max_step
@@ -120,7 +124,9 @@ class DQN_Agent(object):
 
         q_eval_matrix = self.eval_net(rgbs_var,depths_var,questions_var)
         q_eval_matrix = q_eval_matrix.view(-1,9*28*28)
-        q_eval = torch.max(q_eval_matrix,1)[0]
+        actions_var = actions_var.view(-1,1)
+        q_eval = torch.gather(q_eval_matrix, 1, actions_var)  
+        q_eval = q_eval.squeeze(1)
 
         q_next_matrix = self.target_net(rgbs_1_var,depths_1_var,questions_var).detach()  #don't backward
         q_next_matrix = q_next_matrix.view(-1,9*28*28)
@@ -162,18 +168,20 @@ class DQN_Agent(object):
         random.shuffle(group_num_list)
         scene_num_list = list(range(10))
         random.shuffle(scene_num_list)
-        
+
+
         for group_num in group_num_list:  # one eposide
             for scene_num in scene_num_list:
                 rgb_image_raw,depth_image_raw,all_ques,all_encode_ques = self.env.new_scene(group_num = group_num,scene_num = scene_num)      #new scene
-                
-                rgb_image = self.rgb_norm(rgb_image_raw)
-                depth_image = self.depth_norm(depth_image_raw)
-
+                ques_num_list = list(range(40))
+                random.shuffle(ques_num_list)
                 for i in range(len(all_encode_ques)):   #one task
-                    single_encode_ques = all_encode_ques[i]
-                    single_ques = all_ques[i]
+
+                    single_encode_ques = all_encode_ques[ques_num_list[i]]
+                    single_ques = all_ques[ques_num_list[i]]
                     task_total_reward = 0
+                    task_total_reward_e = 0
+                    task_total_reward_q = 0
                     self.task_total_loss = 0
                     self.task_total_q = 0
                     self.update_count = 0
@@ -181,17 +189,28 @@ class DQN_Agent(object):
                     print("target:",single_ques['obj'])
                     for act_step in range(self.max_step):
 
+                        if self.learn_step_counter > self.epsilon_update_step:
+                            reward_weight = self.reward_weight_end
+                        else:
+                            reward_weight = self.reward_weight_start-(self.learn_step_counter / float(self.epsilon_update_step)) *(self.reward_weight_start-self.reward_weight_end)
+                            
+
                         # 1. predict
-                        rgb_image_var = Variable(torch.FloatTensor(rgb_image).cuda())
+                        depth_image_raw,rgb_image_raw = self.env.camera.get_camera_data()
+                        rgb_image = self.rgb_norm(rgb_image_raw)
+                        depth_image = self.depth_norm(depth_image_raw)
+
+                        rgb_image_var = Variable(torch.FloatTensor(rgb_image).cuda())   
                         rgb_image_var = rgb_image_var.unsqueeze(0)
                         depth_image_var = Variable(torch.FloatTensor(depth_image).cuda())
                         depth_image_var = depth_image_var.unsqueeze(0)
                         question_var = Variable(torch.LongTensor(single_encode_ques).cuda())
                         question_var = question_var.unsqueeze(0)
+
                         action = self.choose_action(rgb_image_var,depth_image_var,question_var)
                         # 2. act
                         # notice the action is in [0, 18*18*8-1]
-                        rgb_1_image_raw, depth_1_image_raw, reward, terminal = self.env.act(action,single_ques['obj'],single_ques['type'])
+                        rgb_1_image_raw, depth_1_image_raw, reward, terminal,reward_e,reward_q = self.env.act(action,single_ques['obj'],single_ques['type'],self.reward_type,reward_weight)
                         
                         rgb_1_image = self.rgb_norm(rgb_1_image_raw)
                         depth_1_image = self.depth_norm(depth_1_image_raw)
@@ -202,6 +221,8 @@ class DQN_Agent(object):
                         self.learn()
 
                         task_total_reward += reward
+                        task_total_reward_e += reward_e
+                        task_total_reward_q += reward_q
                         task_act_num += 1   
 
                         if terminal:                                            
@@ -209,11 +230,18 @@ class DQN_Agent(object):
 
 
                     avg_reward = task_total_reward / task_act_num       # caculate the average reward after one task
+                    avg_reward_e = task_total_reward_e / task_act_num
+                    avg_reward_q = task_total_reward_q / task_act_num
+
                     avg_loss = self.task_total_loss / self.update_count 
                     avg_q = self.task_total_q / self.update_count
                     print("avg_loss:",avg_loss)
                     print("avg_reward:",avg_reward) 
+                    print("avg_reward_e:",avg_reward_e) 
+                    print("avg_reward_q:",avg_reward_q) 
                     logging.info("avg_reward:{}".format(avg_reward))
+                    logging.info("avg_reward_e:{}".format(avg_reward_e))
+                    logging.info("avg_reward_q:{}".format(avg_reward_q))
                     logging.info("avg_loss:{}".format(avg_loss))
                     logging.info("avg_q:{}".format(avg_q))
 
@@ -252,14 +280,14 @@ if __name__ == '__main__':
         '-reward_type',
         default='avg',
         type=str,
-        choices=['avg', 'avg+local', 'local'])
+        choices=['global', 'global+local', 'local'])
 
 
     #memory params
     parser.add_argument('-memory_dir',default='../data/memory')
-    parser.add_argument('-memory_size',default=1000)   #100 scene* 40 question
+    parser.add_argument('-memory_size',default=4000)   #100 scene* 40 question
     parser.add_argument('-batch_size',default=16)
-    parser.add_argument('-first_train',default=False,type=bool)
+    parser.add_argument('-first_train',default=True,type=bool)
     parser.add_argument('-learn_step',default=0,type=int)
 
     # optim params
@@ -284,7 +312,6 @@ if __name__ == '__main__':
 
 
     # checkpointing
-    parser.add_argument('-checkpoint_name', default='step_579.pt')
     parser.add_argument('-checkpoint_dir', default='../data/checkpoints/act/')
     parser.add_argument('-log_dir', default='logs/act/')
     args = parser.parse_args()

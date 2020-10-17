@@ -289,7 +289,7 @@ class UR5(object):
                                        [118, 183, 178],  # cyan
                                        [255, 157, 167]]) / 255.0  # pink
         # Read files in object mesh directory
-        self.test_file_dir = os.path.abspath('../data/test-cases/')
+        self.test_file_dir = os.path.abspath('../data/test_cases/')
         self.test_preset_file = os.path.join(self.test_file_dir, self.testing_file)
         self.obj_mesh_dir=os.path.abspath('../data/mesh')
         self.obj_num = obj_num
@@ -606,7 +606,7 @@ class Environment(object):
         all_ques = json.load(ques_file)
 
         self.close()
-        self.obj_num = int(scene_num/3) * 15 + 20
+        self.obj_num = int(scene_num//3) * 15 + 20
 
         self.ur5 = UR5(testing_file=scene_name,obj_num=self.obj_num)
         self.ur5.ankleinit()
@@ -625,13 +625,15 @@ class Environment(object):
 
 
 
-    def act(self,action_location,target_name,ques_type):   #1:push 2:suck 3:loose
+    def act(self,action_location,target_name,ques_type,reward_type,reward_weight):   #1:push 2:suck 3:loose
         loca_ori = action_location // (28*28)
         loca_x = (action_location % (28*28))//28
         loca_y = (action_location % (28*28))%28
         action = [loca_ori,8*loca_x,8*loca_y]
         overlap_list_before = []
         overlap_list_after = []
+        position_list_before = []
+        position_list_after = []
         target_index =  [i for i,x in enumerate(self.ur5.test_obj_type) if x == target_name]
         push_depth=-0.1
         push_dis = 224/4
@@ -645,46 +647,90 @@ class Environment(object):
         for one_target_index in target_index:
             overlap_rate,_ = self.ur5.check_overlap(one_target_index,self.obj_dic)
             overlap_list_before.append(overlap_rate)
+        for obj_index in range(self.obj_num):
+            position_list_before.append(self.ur5.obj_dict[obj_index]['position'])
 
-        self.ur5.ur5push(move_begin,move_to)
-        time.sleep(2)
-        #print('\n -- Push from {} to {}' .format(start_point,end_point))
-        self.obj_dic = self.ur5.get_obj_positions_and_orientations()   #take action and update obj_dic
+
+        if loca_ori != 8:  # the output action is not stop
+            self.ur5.ur5push(move_begin,move_to)
+            time.sleep(2)
+            #print('\n -- Push from {} to {}' .format(start_point,end_point))
+            self.obj_dic = self.ur5.get_obj_positions_and_orientations()   #take action and update obj_dic
 
 
         for one_target_index in target_index:
             overlap_rate,_ = self.ur5.check_overlap(one_target_index,self.obj_dic)
             overlap_list_after.append(overlap_rate)
+        for obj_index in range(self.obj_num):
+            position_list_after.append(self.ur5.obj_dict[obj_index]['position'])
 
+
+        reward_para = [overlap_list_before,overlap_list_after,position_list_before,position_list_after]
+
+        reward,terminal,reward_e,reward_q = self.reward_cal(loca_ori,ques_type,reward_para,reward_type,reward_weight)
+        depth_image_after,rgb_image_after =  self.camera.get_camera_data()
+
+        return rgb_image_after,depth_image_after,reward,terminal,reward_e,reward_q 
+
+    def reward_cal(self,action_type,ques_type,reward_para,reward_type,reward_weight):
+        reward_e = 0
+        reward_q = 0
+        terminal = 0
+        for i in range(self.obj_num):
+            p_i = np.array(reward_para[2][i])
+            p_i_1 = np.array(reward_para[3][i])
+            reward_e += np.linalg.norm(p_i-p_i_1)/(np.linalg.norm(p_i)*self.obj_num)
+
+        predict_stop_sig = int(action_type==8)
         if ques_type in ['exist_negative','exist_positive']:
-        
-            if len(overlap_list_before) == 0:
-                terminal = 1
+            if len(reward_para[0]) == 0:
+                true_stop_sig  = 1
+            elif min(reward_para[0]) <0.1:
+                true_stop_sig = 1
             else:
-                terminal = int(min(overlap_list_before)< 0.1)
-            
-            if terminal:
-                reward = 0
-            else:
-                reward = (min(overlap_list_before) - min(overlap_list_after)) / min(overlap_list_before)
-
+                true_stop_sig = 0
         elif ques_type in ['count_negative','count_positive']:
+            if len(reward_para[0]) == 0:
+                true_stop_sig  = 1
+            elif max(reward_para[0]) <0.1:
+                true_stop_sig = 1
+            else:
+                true_stop_sig = 0
+    
+        if (predict_stop_sig + true_stop_sig) ==2: #right stop
+            reward_q = 0
+            terminal = 1
+        elif predict_stop_sig > true_stop_sig: #should not stop but stop
+            reward_q = -1
+            terminal = 0
+        elif predict_stop_sig < true_stop_sig: #should stop but not stop
+            reward_q = -0.5
+            terminal = 1
+        else:    #eval  the action
+            c_before = np.array(reward_para[0])
+            c_after = np.array(reward_para[1])
+            c_before_mean = np.mean(c_before)            
+            c_after_mean = np.mean(c_after)
+            reward_g = c_before_mean - c_after_mean / c_before_mean
+
+            if ques_type in ['exist_negative','exist_positive']:
+                reward_l = (np.min(c_before) - np.min(c_after)) / np.min(c_before)
+                terminal = int(np.min(c_after)<0.1)
+            else:
+                reward_l = (np.max(c_before) - np.max(c_after)) / np.max(c_before)
+                terminal = int(np.max(c_after)<0.1)
+
+            if reward_type == 'global':
+                reward_q = reward_g
+            elif reward_type == 'local':
+                reward_q = reward_l
+            elif reward_type == 'global + local':
+                reward_q = 0.5*reward_g + 0.5*reward_l
         
-            if len(overlap_list_before) == 0:
-                terminal = 1
-            else:
-                terminal = int(max(overlap_list_before)< 0.1)
+        reward = reward_weight*reward_e + (1-reward_weight)*reward_q
+        return reward, terminal,reward_e,reward_q
             
-            if terminal:
-                reward = 0
-            else:
-                reward = (max(overlap_list_before) - max(overlap_list_after)) / max(overlap_list_before)
-
-        depth_image_after,rgb_image_after = self.camera.get_camera_data()
-
-
-        return rgb_image_after,depth_image_after,reward,terminal
-
+            
 
 
     def close(self):

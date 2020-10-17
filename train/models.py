@@ -161,7 +161,7 @@ class act_model(torch.nn.Module):
             nn.ReLU(),
             nn.Dropout(p=0.5)
         )
-        self.pointwise = nn.Conv2d(pointwise_in_channels, 8, 1, 1)
+        self.pointwise = nn.Conv2d(pointwise_in_channels, 9, 1, 1)
 
 
     def forward(self,rgb_image, depth_image,ques):
@@ -172,7 +172,7 @@ class act_model(torch.nn.Module):
         question_reshaped = question_linear.view(-1, 32, 1, 1).repeat(1, 1, 28, 28) #32*28*28
 
         x = torch.cat((image_embedding, question_reshaped), dim=1)  #64*28*28
-        output = self.pointwise(x) #8*28*28
+        output = self.pointwise(x) #9*28*28
         return output
 
 # ----------- vqa -----------
