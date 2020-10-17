@@ -48,10 +48,12 @@ class DQN_Agent(object):
         self.epsilon_start = args.epsilon_start
         self.epsilon_end = args.epsilon_end
         self.epsilon_update_step = args.epsilon_update_step
+        
 
         self.reward_type = args.reward_type
         self.reward_weight_start = args.reward_weight_start
         self.reward_weight_end = args.reward_weight_end
+        self.max_avg_act_reward = args.max_avg_act_reward
 
         self.discount = args.discount
         self.learning_rate = args.learning_rate
@@ -162,7 +164,7 @@ class DQN_Agent(object):
 
         self.update_count = 0
         task_total_reward, self.task_total_loss, self.task_total_q = 0., 0., 0.
-        max_avg_act_reward = 0.33
+        
 
         group_num_list = list(range(self.test_group_num))
         random.shuffle(group_num_list)
@@ -245,7 +247,7 @@ class DQN_Agent(object):
                     logging.info("avg_loss:{}".format(avg_loss))
                     logging.info("avg_q:{}".format(avg_q))
 
-                    if  0.9*avg_reward > max_avg_act_reward:   #avg_reward相当于在新的场景测试集上的test score
+                    if  0.9*avg_reward > self.max_avg_act_reward:   #avg_reward相当于在新的场景测试集上的test score
                         checkpoint = {'state': get_state(self.eval_net),
                         'optimizer': self.optimizer.state_dict()}
                         checkpoint_t = {'state': get_state(self.target_net)}
@@ -258,9 +260,9 @@ class DQN_Agent(object):
 
 
                         print('Saving checkpoint to %s' % checkpoint_path)
-                        max_avg_act_reward = max(max_avg_act_reward, avg_reward)
-                        print('\n [#] Up-to-now, the max action reward is %.4f \n --------------- ' %(max_avg_act_reward))
-                        logging.info("max action reward:{}".format(max_avg_act_reward))
+                        self.max_avg_act_reward = max(self.max_avg_act_reward, avg_reward)
+                        print('\n [#] Up-to-now, the max action reward is %.4f \n --------------- ' %(self.max_avg_act_reward))
+                        logging.info("max action reward:{}".format(self.max_avg_act_reward))
                         self.memory.save()
 
 
@@ -287,7 +289,8 @@ if __name__ == '__main__':
     parser.add_argument('-memory_dir',default='../data/memory')
     parser.add_argument('-memory_size',default=4000)   #100 scene* 40 question
     parser.add_argument('-batch_size',default=16)
-    parser.add_argument('-first_train',default=True,type=bool)
+    parser.add_argument('-first_train',default=False,type=bool)
+    parser.add_argument('-max_avg_act_reward',default=0.0,type=float)
     parser.add_argument('-learn_step',default=0,type=int)
 
     # optim params
@@ -346,7 +349,15 @@ if __name__ == '__main__':
 
     if not os.path.exists(args.checkpoint_dir):
         os.makedirs(args.checkpoint_dir)
-        os.makedirs(args.log_dir)
+        os.makedirs(args.log_dir)  
+
+    
+    if not args.first_train:
+        checkpoint_file = 'step_329.pt'
+        args.learn_step = 329
+        args.max_avg_act_reward = 1.41
+        print("load before")
+
 
 
     dqn_env = environment.Environment()
@@ -358,8 +369,7 @@ if __name__ == '__main__':
         if args.first_train:
             act_model.train()
         else:
-            checkpoint_file = 'step_616.pt'
-            args.learn_step = 616
+
             act_checkpoint = torch.load(checkpoint_file)
             act_model.eval_net.load_state_dict(act_checkpoint['state'])
             act_model.target_net.load_state_dict(act_checkpoint['state'])

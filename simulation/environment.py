@@ -607,7 +607,8 @@ class Environment(object):
 
         self.close()
         self.obj_num = int(scene_num//3) * 15 + 20
-
+        print("obj_num",self.obj_num)
+        print(scene_name)
         self.ur5 = UR5(testing_file=scene_name,obj_num=self.obj_num)
         self.ur5.ankleinit()
         self.ur5_location = self.ur5.ur5_position
