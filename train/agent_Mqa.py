@@ -48,6 +48,8 @@ class DQN_Agent(object):
         self.epsilon_start = args.epsilon_start
         self.epsilon_end = args.epsilon_end
         self.epsilon_update_step = args.epsilon_update_step
+        self.reward_update_step = args.reward_update_step
+        self.save_every = args.save_every
         
 
         self.reward_type = args.reward_type
@@ -166,21 +168,24 @@ class DQN_Agent(object):
         task_total_reward, self.task_total_loss, self.task_total_q = 0., 0., 0.
         
 
-        group_num_list = list(range(self.test_group_num))
+        group_num_list = list(range(self.train_group_num))
+        
         random.shuffle(group_num_list)
-        scene_num_list = list(range(10))
+        scene_num_list = list(range(1,10))
         random.shuffle(scene_num_list)
-
+        task_num = 0
+        print(group_num_list)
+        print(scene_num_list)
 
         for group_num in group_num_list:  # one eposide
             for scene_num in scene_num_list:
                 rgb_image_raw,depth_image_raw,all_ques,all_encode_ques = self.env.new_scene(group_num = group_num,scene_num = scene_num)      #new scene
-                ques_num_list = list(range(40))
-                random.shuffle(ques_num_list)
-                for i in range(len(all_encode_ques)):   #one task
+                ques_num_list = np.random.choice(a=40, size=10, replace=False, p=None)
+                task_num +=1
+                for ques_index in ques_num_list:   #one task
 
-                    single_encode_ques = all_encode_ques[ques_num_list[i]]
-                    single_ques = all_ques[ques_num_list[i]]
+                    single_encode_ques = all_encode_ques[ques_index]
+                    single_ques = all_ques[ques_index]
                     task_total_reward = 0
                     task_total_reward_e = 0
                     task_total_reward_q = 0
@@ -194,7 +199,7 @@ class DQN_Agent(object):
                         if self.learn_step_counter > self.epsilon_update_step:
                             reward_weight = self.reward_weight_end
                         else:
-                            reward_weight = self.reward_weight_start-(self.learn_step_counter / float(self.epsilon_update_step)) *(self.reward_weight_start-self.reward_weight_end)
+                            reward_weight = self.reward_weight_start-(self.learn_step_counter / float(self.reward_update_step)) *(self.reward_weight_start-self.reward_weight_end)
                             
 
                         # 1. predict
@@ -247,23 +252,27 @@ class DQN_Agent(object):
                     logging.info("avg_loss:{}".format(avg_loss))
                     logging.info("avg_q:{}".format(avg_q))
 
-                    if  0.9*avg_reward > self.max_avg_act_reward:   #avg_reward相当于在新的场景测试集上的test score
+                    if  avg_reward > self.max_avg_act_reward:   #avg_reward相当于在新的场景测试集上的test score
                         checkpoint = {'state': get_state(self.eval_net),
                         'optimizer': self.optimizer.state_dict()}
-                        checkpoint_t = {'state': get_state(self.target_net)}
 
                         checkpoint_path = '%s/step_%d.pt' % (self.args.checkpoint_dir, self.learn_step_counter)
                         torch.save(checkpoint, checkpoint_path)
-
-                        checkpoint_path_t = '%s/t_step_%d.pt' % (self.args.checkpoint_dir, self.learn_step_counter)
-                        torch.save(checkpoint_t, checkpoint_path_t)
-
 
                         print('Saving checkpoint to %s' % checkpoint_path)
                         self.max_avg_act_reward = max(self.max_avg_act_reward, avg_reward)
                         print('\n [#] Up-to-now, the max action reward is %.4f \n --------------- ' %(self.max_avg_act_reward))
                         logging.info("max action reward:{}".format(self.max_avg_act_reward))
                         self.memory.save()
+                    elif task_num % self.save_every == 0:
+                        task_num +=  1
+                        checkpoint = {'state': get_state(self.eval_net),
+                        'optimizer': self.optimizer.state_dict()}
+
+                        checkpoint_path = '%s/step_f_%d.pt' % (self.args.checkpoint_dir, self.learn_step_counter)
+                        torch.save(checkpoint, checkpoint_path)
+                        print('Saving checkpoint to %s' % checkpoint_path)
+
 
 
 
@@ -280,7 +289,7 @@ if __name__ == '__main__':
     
     parser.add_argument(
         '-reward_type',
-        default='avg',
+        default='global',
         type=str,
         choices=['global', 'global+local', 'local'])
 
@@ -289,7 +298,7 @@ if __name__ == '__main__':
     parser.add_argument('-memory_dir',default='../data/memory')
     parser.add_argument('-memory_size',default=4000)   #100 scene* 40 question
     parser.add_argument('-batch_size',default=16)
-    parser.add_argument('-first_train',default=False,type=bool)
+    parser.add_argument('-first_train',default=True,type=bool)
     parser.add_argument('-max_avg_act_reward',default=0.0,type=float)
     parser.add_argument('-learn_step',default=0,type=int)
 
@@ -299,8 +308,9 @@ if __name__ == '__main__':
     parser.add_argument('-epsilon_start', default=1,type=float)
     parser.add_argument('-epsilon_end', default=0.1,type=float)
     parser.add_argument('-reward_weight_start', default=1,type=float)
-    parser.add_argument('-reward_weight_end', default=0.1,type=float)
+    parser.add_argument('-reward_weight_end', default=0.5,type=float)
     parser.add_argument('-epsilon_update_step', default=2000,type=float)  #memory / 2
+    parser.add_argument('-reward_update_step', default=4000,type=float) #memory
 
     parser.add_argument('-discount', default=0.6, type=float)
     parser.add_argument('-max_step', default=10, type=int)
@@ -310,7 +320,7 @@ if __name__ == '__main__':
     # bookkeeping
     parser.add_argument('-print_every', default=5, type=int)
     parser.add_argument('-eval_every', default=10, type=int)
-    parser.add_argument('-save_every', default=200, type=int) #optional if you would like to save specific epochs as opposed to relying on the eval thread
+    parser.add_argument('-save_every', default=10, type=int) #optional if you would like to save specific epochs as opposed to relying on the eval thread
     parser.add_argument('-model', default='act')
 
 
@@ -353,9 +363,9 @@ if __name__ == '__main__':
 
     
     if not args.first_train:
-        checkpoint_file = 'step_329.pt'
-        args.learn_step = 329
-        args.max_avg_act_reward = 1.41
+        checkpoint_file = 'step_598.pt'
+        args.learn_step = 598
+        args.max_avg_act_reward = 2.730818776108266
         print("load before")
 
 

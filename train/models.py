@@ -156,12 +156,19 @@ class act_model(torch.nn.Module):
         pointwise_in_channels = 32 + 32   #qustion + rgbd
         self.pointwise = nn.Sequential(
             nn.Conv2d(pointwise_in_channels,32,1),
+            nn.BatchNorm2d(32),
+            nn.ReLU(),
+
             nn.Conv2d(32,16,1),
-            nn.Conv2d(16,8,1),
+            nn.BatchNorm2d(16),
+            nn.ReLU(),
+
+            
+            nn.Conv2d(16,9,1),
+            nn.BatchNorm2d(9),
             nn.ReLU(),
             nn.Dropout(p=0.5)
         )
-        self.pointwise = nn.Conv2d(pointwise_in_channels, 9, 1, 1)
 
 
     def forward(self,rgb_image, depth_image,ques):

@@ -26,6 +26,7 @@ class ReplayMemory:
 
         self.batch_size = args.batch_size
         self.current = 0
+        self.memory_full = 0
 
 
     def add(self, rgb, depth, rgb1, depth1,ques,action,reward,terminal):
@@ -39,7 +40,11 @@ class ReplayMemory:
         self.depths_1[self.current] = depth1
         self.questions[self.current] = ques
         self.terminals[self.current] = terminal
-        self.current = (self.current + 1) % self.memory_size
+        self.current = (self.current + 1) 
+        if self.current >= self.memory_size:
+            self.current = 0
+            self.memory_full = 1
+        
 
 
 
@@ -49,8 +54,12 @@ class ReplayMemory:
         """
         indexes = []
         while len(indexes) < self.batch_size:
-            index = random.randint(0, self.current - 1)
-            indexes.append(index)
+            if self.memory_full == 0:
+                index = random.randint(0, self.current - 1)
+                indexes.append(index)
+            else:
+                index = random.randint(0, self.memory_size-1)
+                indexes.append(index)
 
         actions = self.actions[indexes]
         rewards = self.rewards[indexes]
