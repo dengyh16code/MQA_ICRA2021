@@ -43,7 +43,7 @@ class scene(object):
 
 
         self.all_obj =[
-            'book', 'bottle', 'calclator','can','card',
+            'book', 'bottle', 'calculator','can','card',
             'charger','key', 'keyboard', 'mouse', 'pen',
             'phone','clock','cube','cup','gamepad',
             'eraser','screwdriver','scissors','usb','wallet'

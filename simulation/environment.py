@@ -416,6 +416,9 @@ class UR5(object):
             curr_shape_handle = ret_ints[0]
             self.object_handles.append(curr_shape_handle)
 
+    def gripper_close(self):
+        simxSetIntegerSignal(self.clientID,'RG2CMD',1,simx_opmode_blocking)
+
 
     
     def get_obj_positions_and_orientations(self):
@@ -586,6 +589,7 @@ class Environment(object):
         self.camera = Camera(self.clientID)
         time.sleep(1)
         self.obj_dic = self.ur5.get_obj_positions_and_orientations()
+        self.ur5.gripper_close()
 
         print('\n [*] Initialize the simulation environment')
 
@@ -607,14 +611,17 @@ class Environment(object):
 
         self.close()
         self.obj_num = int(scene_num//3) * 15 + 20
-        print("obj_num",self.obj_num)
-        print(scene_name)
+        if self.obj_num >50:
+            self.obj_num = 50
+       #print("obj_num",self.obj_num)
+        #print(scene_name)
         self.ur5 = UR5(testing_file=scene_name,obj_num=self.obj_num)
         self.ur5.ankleinit()
         self.ur5_location = self.ur5.ur5_position
         # initial the camera in simulation
         self.clientID = self.ur5.get_clientID()
         self.camera = Camera(self.clientID)
+        self.ur5.gripper_close()
         time.sleep(1)
         self.obj_dic = self.ur5.get_obj_positions_and_orientations()
 
@@ -656,6 +663,8 @@ class Environment(object):
             self.ur5.ur5push(move_begin,move_to)
             time.sleep(2)
             #print('\n -- Push from {} to {}' .format(start_point,end_point))
+            #print(move_begin)
+            #print(move_to)
             self.obj_dic = self.ur5.get_obj_positions_and_orientations()   #take action and update obj_dic
 
 
@@ -677,10 +686,13 @@ class Environment(object):
         reward_e = 0
         reward_q = 0
         terminal = 0
+        push_dis_world = 0.25
         for i in range(self.obj_num):
             p_i = np.array(reward_para[2][i])
             p_i_1 = np.array(reward_para[3][i])
-            reward_e += np.linalg.norm(p_i-p_i_1)/(np.linalg.norm(p_i)*self.obj_num)
+            new_reward_e = np.linalg.norm(p_i-p_i_1)/(push_dis_world)
+            if (new_reward_e > reward_e) and (new_reward_e < 4) :
+                reward_e = new_reward_e
 
         predict_stop_sig = int(action_type==8)
         if ques_type in ['exist_negative','exist_positive']:
@@ -699,20 +711,20 @@ class Environment(object):
                 true_stop_sig = 0
     
         if (predict_stop_sig + true_stop_sig) ==2: #right stop
-            reward_q = 0
+            reward_q = 1
             terminal = 1
         elif predict_stop_sig > true_stop_sig: #should not stop but stop
             reward_q = -1
             terminal = 0
         elif predict_stop_sig < true_stop_sig: #should stop but not stop
-            reward_q = -0.5
+            reward_q = 0
             terminal = 1
         else:    #eval  the action
             c_before = np.array(reward_para[0])
             c_after = np.array(reward_para[1])
             c_before_mean = np.mean(c_before)            
             c_after_mean = np.mean(c_after)
-            reward_g = c_before_mean - c_after_mean / c_before_mean
+            reward_g = (c_before_mean - c_after_mean) / c_before_mean
 
             if ques_type in ['exist_negative','exist_positive']:
                 reward_l = (np.min(c_before) - np.min(c_after)) / np.min(c_before)
@@ -725,8 +737,11 @@ class Environment(object):
                 reward_q = reward_g
             elif reward_type == 'local':
                 reward_q = reward_l
-            elif reward_type == 'global + local':
+            elif reward_type == 'global+local':
                 reward_q = 0.5*reward_g + 0.5*reward_l
+            else:
+                print(reward_type)
+                print("error:stop training")
         
         reward = reward_weight*reward_e + (1-reward_weight)*reward_q
         return reward, terminal,reward_e,reward_q
